@@ -15,6 +15,7 @@ class MSToolProtein(object):
         self.map = None
 
         self.name = pdbfile[:-4]
+        print(self.name)
 
 
 
@@ -34,6 +35,30 @@ class MSToolProtein(object):
         while i * number < length:
             self.u.atoms.loc[i*number:(i+1)*number, 'chain'] = get_segid(i)
             i+=1
+
+    def count_chain_lengths(self):
+
+        length = self.u.atoms.name.count()
+        current = 0
+        past = 0
+        lengths = []
+        i =0
+        num =0
+        resids = self.u.atoms.resid
+        #print(resids)
+        #print(resids[0])
+        while i < length:
+            past = current
+            current = resids[i]
+            #print(current)
+            if current < past:
+                print(num)
+                lengths.append(num)
+                num = 0
+            i += 1
+            num += 1
+        lengths.append(num)
+        return lengths
     
     def reindex_chains_with_list(self, chain_lengths):
 
@@ -238,16 +263,51 @@ class MSToolProteinComplex(object):
 
         now = time.time()
         for i in range(1,len(lizt)):
+            print(i)
             lizt[0] = mstool.Merge(lizt[0].atoms, lizt[i].atoms)
         later = time.time()
         print(later - now)
         return lizt[0]
-    def write(self,name=None, pdb=False):
+
+    def write(self,name=None, pdb=False, reindex=False, reindex_list=None,
+              reindex_count=False):
 
         if name is None:
             name = self.name + ".dms"
 
         total = self.get_universe()
+        if reindex:
+            i = 0
+            length = total.atoms.name.count()
+
+            while i * reindex < length:
+                total.atoms.loc[i * reindex:(i + 1) * reindex, 'chain'] = get_segid(i)
+                i += 1
+        elif reindex_count:
+            length = total.atoms.name.count()
+            current = 0
+            past = 0
+            reindex_list = []
+            i = 0
+            num = 0
+            resids = total.atoms.resid
+            while i < length:
+                past = current
+                current = resids[i]
+                # print(current)
+                if current < past:
+                    print(num)
+                    reindex_list.append(num)
+                    num = 0
+                i += 1
+                num += 1
+            reindex_list.append(num)
+        if reindex_list is not None:
+            current = 0
+            for i in range(len(reindex_list)):
+                length = reindex_list[i]
+                total.atoms.loc[current:current + length, 'chain'] = get_segid(i)
+                current += length
 
         total.write(name)
 
