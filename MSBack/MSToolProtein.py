@@ -74,6 +74,13 @@ class MSToolProtein(object):
         values = np.add(values, vector)
         self.u.atoms[['x', 'y', 'z']] = values
 
+    def center(self):
+
+        values = self.u.atoms[['x', 'y', 'z']].values
+        vector = np.multiply(-1, np.average(values, axis=0))
+        values = np.add(values, vector)
+        self.u.atoms[['x', 'y', 'z']] = values
+
     def shift_center_to(self, position):
 
         values = self.u.atoms[['x', 'y', 'z']].values
