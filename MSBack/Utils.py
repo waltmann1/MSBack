@@ -1,6 +1,29 @@
 import pickle as pkl
 from egnn_utils import *
+from time import time
+import numpy as np
 
+def timer(func):
+    def time_wrapper(*args, **kwargs):
+        now = time()
+        result = func(*args, **kwargs)
+        end = time()
+        total = end - now
+        print(f"The total time was {total} seconds.")
+        return result
+
+    return time_wrapper
+
+def launch_pool_in_batches(pool, n_threads):
+    n_batches = int(np.ceil(len(pool) / n_threads))
+    for batch in range(n_batches):
+        start = batch * n_threads
+        end = np.min( [(batch + 1) * n_threads, len(pool)])
+        subpool = pool[start:end]
+        for thread in subpool:
+            thread.start()
+        for thread in subpool:
+            thread.join()
 
 def pro_res_to_ohe(string_list):
 
@@ -91,6 +114,7 @@ def load_model(model_path, ckp, device): #, sym='e3', pos_cos=None, seq_feats=0,
     '''Load model from a given path to device'''
 
     # load hyperparams associated with specific model
+    model_path = os.path.dirname(os.path.abspath(__file__)) + "/" +  model_path
     model_params = pkl.load(open(f'{model_path}/params.pkl', 'rb'))
 
     ## TODO -- get rid or these inputs and always set pos_cos, num_positions to None
@@ -129,9 +153,3 @@ def load_model(model_path, ckp, device): #, sym='e3', pos_cos=None, seq_feats=0,
     model.load_state_dict(torch.load(state_dict_path))
 
     return model
-
-
-
-#class Flowback(nn.Module):
-
-
