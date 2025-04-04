@@ -7,7 +7,7 @@ import time
 import pandas as pd
 import sys
 
-sys.path.append("../Utils")
+#sys.path.append("../Utils")
 from Utils import *
 
 class MSToolProtein(object):
@@ -33,10 +33,10 @@ class MSToolProtein(object):
     def get_map(self, mapping_file):
 
         map = None
-        print(mapping_file, mapping_file[-5:])
+        #print(mapping_file, mapping_file[-5:])
         if mapping_file[-5:] == ".yaml":
             map = self.read_cg_yaml(mapping_file)
-            print("map", map)
+            #print("map", map)
         return map
 
     def reindex_chains(self, number):
@@ -46,6 +46,10 @@ class MSToolProtein(object):
         while i * number < length:
             self.u.atoms.loc[i*number:(i+1)*number, 'chain'] = get_segid(i)
             i+=1
+
+    def num_residues(self):
+
+        return len(set(zip(self.u.atoms.resid.values, self.u.atoms.chain.values)))
 
     def count_chain_lengths(self):
 
@@ -63,7 +67,7 @@ class MSToolProtein(object):
             current = resids[i]
             #print(current)
             if current < past:
-                print(num)
+                #print(num)
                 lengths.append(num)
                 num = 0
             i += 1
@@ -77,6 +81,7 @@ class MSToolProtein(object):
         for i in range(len(chain_lengths)):
             length = chain_lengths[i]
             self.u.atoms.loc[current:current + length, 'chain'] = get_segid(i)
+            print("indexing chain, ", get_segid(i))
             current += length
 
     def reindex_chains_by_residues(self, chain_lengths):
@@ -144,8 +149,11 @@ class MSToolProtein(object):
     def rmsd(self, ref_protein):
 
         uref = ref_protein.u
-        print(self.u.atoms[['x', 'y', 'z']].values.shape)
-        print(uref.atoms[['x', 'y', 'z']].values.shape)
+
+        if self.u.atoms[['x', 'y', 'z']].values.shape != uref.atoms[['x', 'y', 'z']].values.shape:
+            raise ValueError(f"the number of atoms in this protein, {self.u.atoms[['x', 'y', 'z']].values.shape[0]},"
+                             f" do not match the reference protein, {uref.atoms[['x', 'y', 'z']].values.shape[0]}")
+
         new_mobile_xyz, rmsd = mstool._fit_to(self.u.atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
 
         return rmsd
@@ -160,7 +168,7 @@ class MSToolProtein(object):
             import torch
             api.register_key("900b9938893b4912a03c0e694e046dd0")
             from chroma import Chroma, Protein
-            print("imported Protein")
+            #print("imported Protein")
             path = "/beagle3/gavoth/cwaltmann/code/chroma_weights/"
             if device is None:
                 device = "cpu"
@@ -179,13 +187,13 @@ class MSToolProtein(object):
                     import torch
                     api.register_key("900b9938893b4912a03c0e694e046dd0")
                     from chroma import Chroma, Protein
-                    print("imported Protein")
+                    #print("imported Protein")
                     path = "/beagle3/gavoth/cwaltmann/code/chroma_weights/"
                     self.chroma = Chroma(weights_backbone=path + "chroma_backbone_v1.0.pt",
                                          weights_design=path + "chroma_design_v1.0.pt", device=device)
                     self.chroma_device = device
 
-        print("chroma device", self.chroma_device)
+        #print("chroma device", self.chroma_device)
         return self.chroma, self.chroma_device
 
 
@@ -211,12 +219,12 @@ class MSToolProtein(object):
 
         protein = Protein(protein_name, device=device)
 
-        mask = np.random.randint(100, size=221)
+        mask = np.random.randint(100, size=self.num_residues())
         p = p
         select = torch.Tensor([[thing < p for thing in mask]])
         select = torch.Tensor(select).to(device)
-        print(select.shape)
-        print(protein.to_XCS()[0].shape)
+        #print(select.shape)
+        #print(protein.to_XCS()[0].shape)
 
         n_protein = chroma.design(protein=protein, design_selection=select)
         if pack_sidechains:
@@ -229,6 +237,23 @@ class MSToolProtein(object):
         del protein
         torch.cuda.empty_cache()
         return MSToolProtein(output_name)
+
+    def get_protein_with_new_sequence(self, new_sequence, flowback=None, device=None):
+
+        pro = cp.deepcopy(self)
+        pro.u.atoms = pro.u.atoms[pro.u.atoms.name=="CA"]
+        for chain in np.unique(pro.u.atoms.chain.values):
+            pro.u.atoms.loc[pro.u.atoms.chain==chain, 'resname'] = new_sequence
+        pro.add_backbone_sidechains()
+        flowed = pro.flowback_protein(flowback=flowback, device=device)
+        if self.resmap is not None:
+            flowed.resmap = self.resmap
+            flowed.write_yaml_from_resmap("new")
+            return flowed.get_AAProtein("new.yaml")
+        else:
+            return flowed
+
+
 
     def get_sequence(self):
         return self.u.atoms[self.u.atoms.name == "CA"].resname.values
@@ -265,7 +290,7 @@ class MSToolProtein(object):
                     SC_BUILD_INFO[ONE_TO_THREE_LETTER_MAP[one_letter]]["atom-names"])
                 #self.atom_map_14[one_letter].extend(["PAD"] * (14 - len(self[one_letter])))
 
-    def add_backbone_sidechains(self):
+    def add_backbone_sidechains(self, randomize=False):
 
         proteinu = self.u
         data = {'name': [],
@@ -286,6 +311,12 @@ class MSToolProtein(object):
         resid = things[:, 3]
         self.init_atom_map()
         for ind, resn in enumerate(resname):
+            c1 = proteinu.atoms.chain==chain[ind]
+            c2 = proteinu.atoms.name=="CA"
+            c3 = proteinu.atoms.resid==resid[ind]
+            ca_pos = proteinu.atoms[(c1) & (c2) & (c3)][['x', 'y', 'z']].values
+            assert len(ca_pos) == 1
+            ca_pos = ca_pos[0]
             for name in self.atom_map_14[self.three_to_one_letter_map[resn]]:
                 if name != "CA":
                     #print(name, resn, segname[ind], resid[ind], chain[ind] )
@@ -294,9 +325,17 @@ class MSToolProtein(object):
                     data['segname'].extend([segname[ind]])
                     data['resid'].extend([resid[ind]])
                     data['chain'].extend([chain[ind]])
-                    data['x'].extend([0.0])
-                    data['y'].extend([0.0])
-                    data['z'].extend([0.0])
+                    x= 0.0
+                    y = 0.0
+                    z = 0.0
+                    if randomize:
+                        x = (ca_pos[0] + np.random.rand() -0.5)
+                        y = (ca_pos[1] + np.random.rand() -0.5)
+                        z = (ca_pos[2] + np.random.rand() -0.5)
+                        print(x,y,z)
+                    data['x'].extend([x])
+                    data['y'].extend([y])
+                    data['z'].extend([z])
         new_proteinu_atoms = pd.concat([proteinu.atoms, pd.DataFrame(data)], ignore_index=True)
         new_proteinu_atoms.sort_values(by=['chain', 'resid'], inplace=True)
         self.u.atoms = new_proteinu_atoms
@@ -451,7 +490,9 @@ class MSToolProtein(object):
         mob_ref_atoms = self.u.atoms
         umob = cp.deepcopy(self)
 
-        print(mob_ref_atoms[['x', 'y', 'z']].values.shape, uref.atoms[['x', 'y', 'z']].values.shape)
+        if mob_ref_atoms[['x', 'y', 'z']].values.shape[0] != uref.atoms[['x', 'y', 'z']].values.shape:
+            raise ValueError(f"the number of atoms in this protein, {mob_ref_atoms[['x', 'y', 'z']].values.shape[0]},"
+                         f" do not match the reference protein, {uref.atoms[['x', 'y', 'z']].values.shape[0]}")
 
         new_mobile_xyz, rmsd = mstool._fit_to(mob_ref_atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
         umob.u.atoms[['x', 'y', 'z']] = new_mobile_xyz
@@ -461,6 +502,14 @@ class MSToolProtein(object):
         return rmsd, umob
 
     def get_aligned_protein_resids(self, ref_protein, list_o_resids, ref_resids=None, CA_only=False):
+        """
+
+        :param ref_protein: the MSToolProtein object to align to
+        :param list_o_resids: the residue IDs of the original protein to align based on
+        :param ref_resids: the residue IDs of ref_protein to align the residues in list_o_resids of the original protein, default is to use the list_o_resids again
+        :parmam CA_only: if True, just use the alpha carbons of the given resids. Deault is False
+        :return: the aligned deepcopy of the original protein
+        """
 
         uref = cp.deepcopy(ref_protein.u)
         if ref_resids is None:
@@ -471,19 +520,29 @@ class MSToolProtein(object):
         uref.atoms = uref.atoms[(b1)]
         b2 = [name != "OT2" for name in uref.atoms.name.values]
         uref.atoms = uref.atoms[(b2)]
+        if CA_only:
+            b3 = [name == "CA" for name in uref.atoms.name.values]
+            uref.atoms = uref.atoms[(b3)]
 
-        print(list_o_resids)
+        #print(list_o_resids)
         b1 = [resid in list_o_resids for resid in list(self.u.atoms.resid.values)]
         mob_ref_atoms = self.u.atoms[b1]
         b2 = [name != "OT2" for name in list(mob_ref_atoms.name.values)]
         mob_ref_atoms = mob_ref_atoms[b2]
+        if CA_only:
+            b3 = [name == "CA" for name in list(mob_ref_atoms.name.values)]
+            mob_ref_atoms = mob_ref_atoms[b3]
 
-        print(mob_ref_atoms.shape)
-        print(uref.atoms.shape)
-        print(mob_ref_atoms.name)
-        print(uref.atoms.name)
+        #print(mob_ref_atoms.shape)
+        #print(uref.atoms.shape)
+        #print(mob_ref_atoms.name)
+        #print(uref.atoms.name)
+
+        if mob_ref_atoms[['x', 'y', 'z']].values.shape[0] != uref.atoms[['x', 'y', 'z']].values.shape:
+            raise ValueError(f"the number of atoms in the listed resids,{list_o_resids} , this protein, {mob_ref_atoms[['x', 'y', 'z']].values.shape[0]},"
+                         f" do not match the number of atoms in the listed resids, {ref_resids} ,  reference protein, {uref.atoms[['x', 'y', 'z']].values.shape[0]}")
         umob = cp.deepcopy(self)
-        new_mobile_xyz, rmsd = mstool._fit_to(mob_ref_atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
+        #new_mobile_xyz, rmsd = mstool._fit_to(mob_ref_atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
 
         dr_mob_xyz = np.average(mob_ref_atoms[['x', 'y', 'z']].values, axis=0)
         dr_ref_xyz = np.average(uref.atoms[['x', 'y', 'z']].values, axis=0)
@@ -496,7 +555,7 @@ class MSToolProtein(object):
 
         return rmsd, umob
 
-    def flowback_protein(self, output_name=None, flowback=None, device=None):
+    def flowback_protein(self, output_name=None, flowback=None, device=None, fix_c_term=True):
 
         model = flowback
         if model is None or device is None:
@@ -583,6 +642,9 @@ class MSToolProtein(object):
 
         if output_name is not None:
             flowtein.write(output_name)
+
+        if fix_c_term:
+            flowtein.add_C_terminal_O()
         return flowtein
 
     def get_ss(self):
@@ -615,17 +677,63 @@ class MSToolProtein(object):
 
         return pydssp.assign(coords, out_type="index")
 
+    def get_AAProtein(self, yaml):
+
+        return AAProteinFromMSToolProtein(self, yaml)
+    def write_yaml_from_resmap(self, outfile=None):
+
+        if self.resmap is None:
+            return False
+        if outfile is None:
+            outfile = self.name + "_CG"
+
+        # loading yaml file
+
+        num_CG_site = len(self.resmap)
+        offset = len(self.u.atoms.resid.values)
+        map_output = {"site-types": {}, "system": []}
+        names = list(self.u.atoms.name.values)
+        atom_indices = [i for i in list(range(len(names))) if names[i] == "CA"]
+        for CG_site_index in range(num_CG_site):
+            map_output["site-types"]["CG{}".format(CG_site_index + 1)] = {}
+            map_output["site-types"]["CG{}".format(CG_site_index + 1)]['index'] = []
+            map_output["site-types"]["CG{}".format(CG_site_index + 1)]['x-weight'] = []
+            map_output["site-types"]["CG{}".format(CG_site_index + 1)]['f-weight'] = []
+
+            for thing in self.resmap[CG_site_index]:
+                i = thing -1
+                map_output["site-types"]["CG{}".format(CG_site_index + 1)]['index'].append(atom_indices[i])
+                map_output["site-types"]["CG{}".format(CG_site_index + 1)]['x-weight'].append(12.011)
+                map_output["site-types"]["CG{}".format(CG_site_index + 1)]['f-weight'].append(1.0)
+
+        map_output["system"].append({})
+        map_output["system"][0]["anchor"] = 0
+        map_output["system"][0]["repeat"] = 1
+        map_output["system"][0]["offset"] = offset
+        map_output["system"][0]["sites"] = []
+
+        for CG_site_index in range(num_CG_site):
+            map_output["system"][0]["sites"].append(["CG{}".format(CG_site_index + 1), 0])
+
+        # writing yaml file
+
+        with open("%s.yaml" % outfile, 'w') as ff:
+            yaml.dump(map_output, ff, default_flow_style=None)
 
 
 
 class AAProtein(MSToolProtein):
 
+
     def __init__(self, pdbfile, yaml=None):
         super(AAProtein, self).__init__(pdbfile=pdbfile)
         self.map = None
+        self.resmap = None
+        self.yaml = yaml
 
         if yaml is not None:
             self.map = self.read_cg_yaml(yaml)
+            self.resmap = self.res_index_map()
 
     def read_cg_yaml(self, yname):
 
@@ -684,21 +792,37 @@ class AAProtein(MSToolProtein):
         ca_map = self.alpha_c_only_map()
         new_map =[]
         count = 1
+        chains = []
+        resids = []
         for ind1, bead in enumerate(ca_map):
             new_map.append([])
             for ind, atom in enumerate(bead):
-                new_map[ind1].append(count)
+                resid = self.u.atoms.resid.values[atom]
+                if resid not in resids:
+                    resids.append(resid)
+                chain = self.u.atoms.chain.values[atom]
+                if chain not in chains:
+                    chains.append(chain)
+                new_map[ind1].append(resid + np.max(resids)*(len(chains)-1))
                 count += 1
                 if count > max:
                     return new_map
         return  new_map
 
-    def get_cg_protein(self, CA_only=False):
+    def get_cg_protein(self, CA_only=False, use_resmap=False):
 
         the_map = self.map
         if CA_only:
             the_map = self.alpha_c_only_map()
         positions = self.u.atoms[['x', 'y', 'z']].values
+
+        #print(positions.shape)
+        if use_resmap:
+            allowed = self.u.atoms[self.u.atoms.name=="CA"]
+            the_map = [np.subtract(bead, 1) for bead in self.resmap]
+            positions = allowed[['x', 'y', 'z']].values
+        #print(positions.shape)
+        #print(the_map)
         to_return = cp.deepcopy(self)
         to_return.u.atoms = to_return.u.atoms[:len(the_map)]
         new_positions = [np.average(positions[bead], axis=0) for bead in the_map]
@@ -717,11 +841,16 @@ class AAProtein(MSToolProtein):
 
         mob_ref_atoms = cg_protein.u.atoms
         umob = cp.deepcopy(self)
-        print("start protein, monomer", mob_ref_atoms[['x', 'y', 'z']].values.shape)
-        print("end protein, conf0", uref.atoms[['x', 'y', 'z']].values.shape)
-        print(uref.atoms[['x', 'y', 'z']].values)
-        new_mobile_xyz, rmsd = mstool._fit_to(mob_ref_atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
+        #print("start protein, monomer", mob_ref_atoms[['x', 'y', 'z']].values.shape)
+        #print("end protein, conf0", uref.atoms[['x', 'y', 'z']].values.shape)
+        #print(uref.atoms[['x', 'y', 'z']].values)
 
+        shape1 = mob_ref_atoms[['x', 'y', 'z']].values.shape
+        shape2 = uref.atoms[['x', 'y', 'z']].values.shape
+        if  shape1 != shape2:
+            raise ValueError(f"The shape of this CG protein,{shape1} , does not match the CG reference, {shape2}")
+
+        #new_mobile_xyz, rmsd = mstool._fit_to(mob_ref_atoms[['x', 'y', 'z']].values, uref.atoms[['x', 'y', 'z']].values)
 
         dr_mob_xyz = np.average(mob_ref_atoms[['x', 'y', 'z']].values, axis=0)
         dr_ref_xyz = np.average(uref.atoms[['x', 'y', 'z']].values, axis=0)
@@ -735,8 +864,16 @@ class AAProtein(MSToolProtein):
 
         return rmsd, umob
 
-    def diffuse_to_CG(self, cg_protein, output_soft=True, pack_sidechains=True,
-                      output_name=None, chroma=None, device=None):
+    def rmsd_cg(self, cg_protein, use_resmap=False):
+
+        cg_this = self.get_cg_protein(use_resmap=use_resmap)
+
+        _, rmsd = mstool._fit_to(cg_protein.u.atoms[['x', 'y', 'z']].values, cg_this.u.atoms[['x', 'y', 'z']].values)
+
+        return rmsd
+
+    def diffuse_to_CG(self, cg_protein, output_soft=False, pack_sidechains=True,
+                      output_name=None, chroma=None, device=None, skip_hard=False):
 
         from chroma import Protein
 
@@ -747,19 +884,19 @@ class AAProtein(MSToolProtein):
             chroma = self.chroma
             device = self.chroma_device
 
-        mapp = self.map
+        mapp = self.res_index_map()
         target = cg_protein.u.atoms[['x', 'y', 'z']].values
-        #print("mapp")
-        #print(mapp)
-        #print(target)
-        #quit()
+
+        if target.shape[0] != len(mapp) or target.shape[1] != 3:
+            raise ValueError(f"number of CG beads,{target.shape[0]} , "
+                             f"does not match the number of target coordinates, {len(mapp)}")
 
         protein_name = self.name + ".pdb"
         if not os.path.exists(protein_name):
-            #protein_name = "temp.pdb"
             self.write(protein_name)
 
         protein = Protein(protein_name, device=device)
+        print("device", device)
         allowed =2
         weight=10
         protein = chroma.cg_sample(mapp, target, allowed, weight, protein_init=protein, steps=1000,
@@ -767,8 +904,9 @@ class AAProtein(MSToolProtein):
         if output_soft:
             protein.to("soft_" + self.name + ".pdb")
 
-        protein = chroma.cg_sample(mapp, target, allowed, weight, protein_init=protein, steps=1000,
-                                   initialize_noise=False, fixed=True, sde_func="reverse_sde", noise_range=[3, 4])
+        if not skip_hard:
+            protein = chroma.cg_sample(mapp, target, allowed, weight, protein_init=protein, steps=1000,
+                                   initialize_noise=False, fixed=True, sde_func="langevin", noise_range=[3, 4])
 
         short_name = self.name
         if output_name is not None:
@@ -788,23 +926,54 @@ class AAProtein(MSToolProtein):
         
         return MSToolProtein(last_name + ".pdb")
 
+    def get_AAProtein_new_map(self):
+
+        if self.resmap is not None:
+            self.write_yaml_from_resmap(outfile="new")
+            return self.get_AAProtein("new.yaml")
+
+
+class AAProteinFromMSToolProtein(AAProtein):
+
+    def __init__(self, mstp, yaml):
+        self.u = cp.deepcopy(mstp.u)
+        self.map = None
+        self.name = cp.deepcopy(mstp.name)
+        self.chroma = None
+        self.chroma_device = None
+        self.flowback = None
+        self.flowback_device = None
+        self.atom_map_14 = None
+        self.three_to_one_letter_map = None
+        self.resmap = None
+        self.yaml = yaml
+
+        if yaml is not None:
+            self.map = self.read_cg_yaml(yaml)
+            self.resmap = self.res_index_map()
+
 
 class MSToolProteinComplex(object):
 
-    def __init__(self, mstps):
+    def __init__(self, mstps, ligands=[]):
 
         self.proteins = mstps
         self.name = "complex"
         self.chain_indices = [get_segid(i) for i in range(len(self.proteins))]
 
+        self.ligs = ligands
 
 
-    def get_universe(self):
 
-        for index, protein in enumerate(self.proteins):
+    def get_universe(self, ligands=False):
+
+
+        total = self.proteins
+        if ligands:
+            total = total + self.ligs
+        for index, protein in enumerate(total):
             protein.u.atoms['chain'] = get_segid(index)
-
-        return self.list_merge([protein.u for protein in self.proteins])
+        return self.list_merge([protein.u for protein in total])
 
     def binary_merge(self, lizt):
 
@@ -821,31 +990,71 @@ class MSToolProteinComplex(object):
             if odd:
                 save = lizt[-1]
             half = int(len(lizt) / 2)
-            now = time.time()
+            #now = time.time()
             lizt = [mstool.Merge(lizt[i].atoms, lizt[i + half].atoms) for i in range(half)]
-            later = time.time()
-            print(later - now)
+            #later = time.time()
+            #print(later - now)
             if odd:
                 lizt.append(save)
         return lizt[0]
 
     def list_merge(self, lizt):
 
-        now = time.time()
+        #now = time.time()
         for i in range(1,len(lizt)):
-            print(i)
+            #print(i)
             lizt[0] = mstool.Merge(lizt[0].atoms, lizt[i].atoms)
-        later = time.time()
-        print(later - now)
+        #later = time.time()
+        #print(later - now)
         return lizt[0]
 
+    def prep_rnem(self):
+
+
+        for pro in self.proteins:
+            pro.u.atoms = pro.u.atoms[pro.u.atoms.name == "CA"]
+
+        self.write("ref_pos.dms", ligands=True)
+        self.write("temp.dms", ligands=False)
+        mstool.Ungroup("temp.dms", "temp_ungrouped.dms", mapping="mapping_siyoung.dat", backbone=False)
+        mstool.capTerminiResidues("temp_ungrouped.dms", "temp_ungrouped_capped.pdb" )
+
+        mstp = MSToolProtein("temp_ungrouped_capped.pdb")
+        lizt = [mstp]
+        lizt.extend(self.ligs)
+        combo = MSToolProteinComplex(lizt)
+        combo.write("temp2.dms")
+        mstp = MSToolProtein("temp2.dms")
+        mstp.reindex_chains_with_list(mstp.count_chain_lengths())
+        mstp.write("complex_ungrouped_capped.dms")
+        os.remove("temp.dms")
+        os.remove("temp2.dms")
+        os.remove("temp_ungrouped.dms")
+        os.remove("temp_ungrouped_capped.pdb")
+
+    def run_rnem(self,energy=1e4):
+
+        self.prep_rnem()
+        now = time.time()
+        rem = mstool.REM("complex_ungrouped_capped.dms", "remed_complex_ungrouped_capped.dms", refposre="ref_pos.dms",
+                         fcx=energy, fcy=energy, fcz=energy, pbc=False, turn_off_EMNVT=True, ff_add="onesite_ff.xml")
+        remed = time.time()
+        print("done with REM")
+        mstool.CheckStructure("remed_complex_ungrouped_capped.dms", mapping="mapping_siyoung.dat")
+        done = time.time()
+        print("time to rem", remed - now)
+        print("time to check", done - remed)
+        print("total time", done - now)
+
+        return "remed_complex_ungrouped_capped.dms"
+
     def write(self,name=None, pdb=False, reindex=False, reindex_list=None,
-              reindex_count=False):
+              reindex_count=False, ligands=False):
 
         if name is None:
             name = self.name + ".dms"
 
-        total = self.get_universe()
+        total = self.get_universe(ligands=ligands)
         if reindex:
             i = 0
             length = total.atoms.name.count()
@@ -866,7 +1075,7 @@ class MSToolProteinComplex(object):
                 current = resids[i]
                 # print(current)
                 if current != past and current != past+1:
-                    print(num)
+                    #print(num)
                     reindex_list.append(num)
                     num = 0
                 i += 1
@@ -885,7 +1094,7 @@ class MSToolProteinComplex(object):
             try:
                 total.write(name + ".pdb")
             except Exception as e:
-                print("Probably have an illegal chain name for PDB")
+                print("Could not write pdb. You probably have an illegal chain name for PDB")
 
 def get_segid(index, include_numbers=True):
 
